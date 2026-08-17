@@ -23,15 +23,19 @@ if [[ ${#utils[@]} -eq 0 ]]; then
   exit 1
 fi
 
-# Ruby class names are UpperCamelCase; a couple of our utility names
-# need special-casing since they start with digits or have internal
-# case Homebrew wouldn't infer automatically (Formula filename vs
-# class name must match Homebrew's own camelization).
+# Homebrew's own camelization rule (docs.brew.sh/Formula-Cookbook):
+# hyphens/underscores mark word boundaries, each word capitalized,
+# separators dropped -- e.g. sdl_mixer.rb => SdlMixer. None of our
+# utility names have separators, so this only needs to capitalize the
+# first letter. Avoid GNU sed's \U (macOS ships BSD sed, which doesn't
+# support it -- it'd emit a literal "U").
 class_name() {
-  case "$1" in
-    b2sum) echo "B2sum" ;;
-    *) echo "$1" | sed -E 's/(^|_)([a-z])/\U\2/g' ;;
-  esac
+  local words word result=""
+  IFS='_-' read -ra words <<< "$1"
+  for word in "${words[@]}"; do
+    result+="$(tr '[:lower:]' '[:upper:]' <<< "${word:0:1}")${word:1}"
+  done
+  echo "$result"
 }
 
 CACHE_DIR="${ROOT_DIR}/.formula-cache"
