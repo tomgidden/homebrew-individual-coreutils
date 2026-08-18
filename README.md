@@ -10,6 +10,7 @@ tools you already have.
 
 ```
 brew tap tomgidden/individual-coreutils
+brew trust tomgidden/individual-coreutils
 brew install timeout
 ```
 
@@ -17,6 +18,11 @@ brew install timeout
 since nothing on stock macOS already provides a `timeout` command. See
 [individual-coreutils](https://github.com/tomgidden/individual-coreutils#why-g-prefixed)
 for why.)
+
+`brew trust` is a newer Homebrew safety gate for non-official taps --
+without it, `brew install`/`brew tap` may refuse to load formulae from
+a tap that isn't `homebrew/core`. Run it once per tap (or formula; see
+`brew trust --help`).
 
 ## What's here
 
