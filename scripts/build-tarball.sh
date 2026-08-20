@@ -38,21 +38,34 @@ echo "==> Homebrew-pinned version: $CU_VERSION"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
+# --connect-timeout/--max-time: an early run hung for ~1h45m on a
+# stalled ftp.gnu.org connection (no read timeout = bounded only by
+# CI's multi-hour job limit, not anything sane) before falling through
+# to the keyserver path, which then failed too -- see GNUPGHOME below.
+# Retry a couple of times rather than failing the whole build on one
+# transient stall, since these are plain unauthenticated downloads.
+CURL_OPTS=(--connect-timeout 15 --max-time 120 --retry 2 --retry-delay 5)
+
 echo "==> Downloading $TARBALL and its signature"
-curl -sSL -o "$TARBALL" "https://ftp.gnu.org/gnu/coreutils/$TARBALL"
-curl -sSL -o "$TARBALL.sig" "https://ftp.gnu.org/gnu/coreutils/$TARBALL.sig"
+curl -sSL "${CURL_OPTS[@]}" -o "$TARBALL" "https://ftp.gnu.org/gnu/coreutils/$TARBALL"
+curl -sSL "${CURL_OPTS[@]}" -o "$TARBALL.sig" "https://ftp.gnu.org/gnu/coreutils/$TARBALL.sig"
 
 if command -v gpg &>/dev/null; then
   echo "==> Verifying GPG signature (key $RELEASE_KEY_FPR)"
-  export GNUPGHOME="$BUILD_DIR/.gnupg"
-  rm -rf "$GNUPGHOME"
-  mkdir -m 700 "$GNUPGHOME"
+  # A GNUPGHOME nested under the repo checkout can exceed the ~104-byte
+  # limit on a Unix domain socket path on some runners (dirmngr's IPC
+  # socket lives under GNUPGHOME) -- seen as "gpg: can't connect to the
+  # dirmngr: File name too long" on a macos-15-intel runner, whose
+  # workspace path (/Users/runner/work/<repo>/<repo>/...) is long
+  # enough to trip it. Use a short mktemp -d path instead.
+  export GNUPGHOME="$(mktemp -d /tmp/gnupghome.XXXXXX)"
+  chmod 700 "$GNUPGHOME"
 
   # Prefer GNU's own published keyring (authoritative, no keyserver
   # flakiness) and only fall back to a public keyserver if that fetch
   # fails for some reason.
   echo "==> Fetching GNU keyring"
-  curl -sSL -o "$BUILD_DIR/gnu-keyring.gpg" https://ftp.gnu.org/gnu/gnu-keyring.gpg
+  curl -sSL "${CURL_OPTS[@]}" -o "$BUILD_DIR/gnu-keyring.gpg" https://ftp.gnu.org/gnu/gnu-keyring.gpg
   if gpg --batch --quiet --import "$BUILD_DIR/gnu-keyring.gpg" 2>/dev/null \
       && gpg --batch --with-colons --fingerprint "$RELEASE_KEY_FPR" &>/dev/null; then
     :
@@ -89,7 +102,12 @@ echo "==> Configuring (--disable-nls: see README for why)"
 # "system libraries only" property this project promises. Force them
 # off explicitly rather than relying on the build machine not having
 # them installed. --without-selinux/--disable-libcap are Linux-only
-# features anyway; harmless to disable on macOS.
+# features anyway; harmless to disable on macOS. --with-openssl=no:
+# individual-coreutils' CI caught cksum dynamically linking a
+# Homebrew-installed openssl@3 on its x86_64 runner (same class of
+# problem as libgmp above -- coreutils' hash utilities opportunistically
+# use libcrypto for speed if configure finds it); forces gnulib's
+# bundled fallback implementation instead.
 ./configure \
   --disable-nls \
   --disable-year2038 \
@@ -97,6 +115,7 @@ echo "==> Configuring (--disable-nls: see README for why)"
   --without-selinux \
   --disable-libcap \
   --disable-xattr \
+  --with-openssl=no \
   >/dev/null
 
 build_utils_from_configured_source "$SRC_DIR" "$OUT_DIR" "$ROOT_DIR" "$@"
