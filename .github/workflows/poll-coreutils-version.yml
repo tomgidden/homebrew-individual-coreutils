@@ -1,0 +1,53 @@
+name: Poll Homebrew coreutils version
+
+# Lightweight, runs often: checks whether Homebrew's coreutils.rb has
+# actually changed since our last release, and only then dispatches
+# the real build-release workflow. Exists so the heavy build doesn't
+# run on a tight schedule "without need" -- most days this job does
+# nothing but one cheap comparison.
+#
+# State lives in this repo's own GitHub Releases (whatever the latest
+# release's tag is), not a committed marker file -- the release list
+# already is the source of truth for what's been published, no reason
+# to duplicate it.
+
+on:
+  schedule:
+    - cron: "12 */6 * * *" # every 6 hours
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve Homebrew-pinned version
+        id: homebrew
+        run: |
+          source scripts/resolve-homebrew-version.sh
+          echo "version=$(resolve_homebrew_coreutils_version)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve latest release we've published
+        id: released
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest="$(gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName 2>/dev/null || echo "")"
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Compare and dispatch build if changed
+        if: steps.homebrew.outputs.version != steps.released.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Homebrew pins ${{ steps.homebrew.outputs.version }}, we've released '${{ steps.released.outputs.version }}' -- triggering build"
+          gh workflow run build-release.yml --repo "${{ github.repository }}"
+
+      - name: No change
+        if: steps.homebrew.outputs.version == steps.released.outputs.version
+        run: echo "Already at ${{ steps.homebrew.outputs.version }}, nothing to do"

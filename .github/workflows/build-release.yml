@@ -1,0 +1,97 @@
+name: Build and release
+
+# The real build: fetches the coreutils version currently pinned by
+# Homebrew's own formula, GPG-verifies and builds it from source (same
+# scripts/build-common.sh per-utility approach as individual-coreutils
+# -- NOT a repackage of Homebrew's Cellar output, which would carry
+# NLS/gettext and other bloat this project avoids), and publishes one
+# release per coreutils version. Re-running against a version already
+# released is a harmless no-op release (same tag, overwritten assets)
+# -- version identity is what makes this idempotent, not run history.
+#
+# Triggered by scripts/poll-coreutils-version.yml when it detects
+# Homebrew's pin has moved, or manually. Deliberately NOT on a schedule
+# itself -- the poll workflow exists so this heavier build only runs
+# when there's an actual reason to.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64-apple-darwin
+          - runner: macos-15-intel
+            arch: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build utils.txt
+        run: scripts/build-tarball.sh
+
+      - name: Package
+        run: scripts/package.sh ${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+      - name: Record coreutils version
+        if: matrix.arch == 'arm64-apple-darwin'
+        run: cp out/COREUTILS_VERSION cu-version.txt
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch == 'arm64-apple-darwin'
+        with:
+          name: cu-version
+          path: cu-version.txt
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cu-version
+          path: .
+
+      - name: Read coreutils version
+        id: version
+        run: echo "cu_version=$(cat cu-version.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.cu_version }}
+          name: coreutils ${{ steps.version.outputs.cu_version }}
+          files: dist/*.tar.gz
+          generate_release_notes: true
+
+      - name: Regenerate formulae
+        run: scripts/generate-formulae.sh "${{ steps.version.outputs.cu_version }}"
+
+      - name: Commit regenerated formulae
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula utils.txt
+          git diff --staged --quiet && exit 0
+          git commit -m "Regenerate Formula/*.rb for coreutils ${{ steps.version.outputs.cu_version }}"
+          git push

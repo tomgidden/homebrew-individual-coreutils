@@ -1,26 +1,37 @@
 #!/usr/bin/env bash
-# Regenerates Formula/*.rb for every utility in a given
-# individual-coreutils release, by downloading each release asset and
-# computing its sha256. Run this after individual-coreutils cuts a new
-# release.
+# Regenerates Formula/*.rb for every utility in utils.txt, pointing at
+# THIS repo's own GitHub Releases (not individual-coreutils' -- this
+# tap builds its own binaries from source, see build-tarball.sh),
+# by downloading each release asset and computing its sha256.
 #
-# Usage: scripts/generate-formulae.sh <tag> <coreutils-version> <util ...>
-#   scripts/generate-formulae.sh v0.1.0 9.11 timeout nproc shuf tac numfmt b2sum shred basenc base32
+# Run this after build-release.yml cuts a new release (it does so
+# automatically as part of that workflow); the coreutils version IS
+# the release tag here, since this repo has no independent versioning
+# of its own -- it just tracks whatever Homebrew's own formula pins.
+#
+# Usage: scripts/generate-formulae.sh <coreutils-version> [util ...]
+#   scripts/generate-formulae.sh 9.11              # all of utils.txt
+#   scripts/generate-formulae.sh 9.11 timeout nproc # just these
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-UPSTREAM_REPO="tomgidden/individual-coreutils"
+THIS_REPO="tomgidden/homebrew-individual-coreutils"
 
-TAG="${1:?usage: generate-formulae.sh <tag> <coreutils-version> <util ...>}"
-CU_VERSION="${2:?usage: generate-formulae.sh <tag> <coreutils-version> <util ...>}"
-shift 2
+CU_VERSION="${1:?usage: generate-formulae.sh <coreutils-version> [util ...]}"
+shift
 utils=("$@")
 
 if [[ ${#utils[@]} -eq 0 ]]; then
-  echo "generate-formulae.sh: no utilities given" >&2
-  exit 1
+  utils_file="${ROOT_DIR}/utils.txt"
+  [[ -f "$utils_file" ]] || { echo "generate-formulae.sh: $utils_file not found" >&2; exit 1; }
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="$(echo "$line" | tr -d '[:space:]')"
+    [[ -z "$line" ]] && continue
+    utils+=("$line")
+  done < "$utils_file"
 fi
 
 # Homebrew's own camelization rule (docs.brew.sh/Formula-Cookbook):
@@ -40,13 +51,14 @@ class_name() {
 
 CACHE_DIR="${ROOT_DIR}/.formula-cache"
 mkdir -p "$CACHE_DIR"
+mkdir -p "$ROOT_DIR/Formula"
 
 for u in "${utils[@]}"; do
   echo "==> $u"
-  arm_asset="individual-coreutils-${u}-${CU_VERSION}-arm64-apple-darwin.tar.gz"
-  x86_asset="individual-coreutils-${u}-${CU_VERSION}-x86_64-apple-darwin.tar.gz"
-  arm_url="https://github.com/${UPSTREAM_REPO}/releases/download/${TAG}/${arm_asset}"
-  x86_url="https://github.com/${UPSTREAM_REPO}/releases/download/${TAG}/${x86_asset}"
+  arm_asset="homebrew-individual-coreutils-${u}-${CU_VERSION}-arm64-apple-darwin.tar.gz"
+  x86_asset="homebrew-individual-coreutils-${u}-${CU_VERSION}-x86_64-apple-darwin.tar.gz"
+  arm_url="https://github.com/${THIS_REPO}/releases/download/${CU_VERSION}/${arm_asset}"
+  x86_url="https://github.com/${THIS_REPO}/releases/download/${CU_VERSION}/${x86_asset}"
 
   arm_file="$CACHE_DIR/$arm_asset"
   x86_file="$CACHE_DIR/$x86_asset"
@@ -60,8 +72,8 @@ for u in "${utils[@]}"; do
 
   cat > "$ROOT_DIR/Formula/$u.rb" <<RUBY
 class $cname < Formula
-  desc "GNU coreutils' $u, standalone (no macOS equivalent exists)"
-  homepage "https://github.com/${UPSTREAM_REPO}"
+  desc "GNU coreutils' $u, standalone (own tap, not the full coreutils suite)"
+  homepage "https://github.com/${THIS_REPO}"
   license "GPL-3.0-or-later"
 
   on_macos do
